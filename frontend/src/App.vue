@@ -407,7 +407,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, markRaw } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, markRaw } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Canvas, FabricImage, Rect, filters } from 'fabric'
 import { saveAs } from 'file-saver'
@@ -511,11 +511,164 @@ const exportHeight = computed(() => {
   return Math.round(fabricCanvas.height * exportScale.value)
 })
 
+const historyStack = ref([])
+const historyIndex = ref(-1)
+const MAX_HISTORY = 30
+let adjustSaveTimer = null
+
+function saveState() {
+  if (!fabricCanvas) return
+  try {
+    const state = {
+      canvasJSON: fabricCanvas.toJSON(),
+      canvasWidth: fabricCanvas.width,
+      canvasHeight: fabricCanvas.height,
+      bgColor: fabricCanvas.backgroundColor,
+      brightness: brightness.value,
+      contrast: contrast.value,
+      saturation: saturation.value
+    }
+    
+    if (historyIndex.value < historyStack.value.length - 1) {
+      historyStack.value = historyStack.value.slice(0, historyIndex.value + 1)
+    }
+    
+    historyStack.value.push(JSON.stringify(state))
+    
+    if (historyStack.value.length > MAX_HISTORY) {
+      historyStack.value.shift()
+    } else {
+      historyIndex.value++
+    }
+  } catch (e) {
+    console.error('保存状态失败', e)
+  }
+}
+
+async function restoreState(stateStr) {
+  try {
+    const state = JSON.parse(stateStr)
+    animating = true
+    
+    fabricCanvas.clear()
+    fabricCanvas.setWidth(state.canvasWidth)
+    fabricCanvas.setHeight(state.canvasHeight)
+    fabricCanvas.backgroundColor = state.bgColor
+    
+    await fabricCanvas.loadFromJSON(state.canvasJSON)
+    
+    mainImage = null
+    fabricCanvas.getObjects().forEach(obj => {
+      if (obj.type === 'image') {
+        mainImage = obj
+      }
+    })
+    
+    if (mainImage) {
+      hasImage.value = true
+    }
+    
+    brightness.value = state.brightness
+    contrast.value = state.contrast
+    saturation.value = state.saturation
+    
+    fabricCanvas.renderAll()
+    
+    setTimeout(() => {
+      animating = false
+    }, 50)
+  } catch (e) {
+    console.error('恢复状态失败', e)
+    animating = false
+  }
+}
+
+function undo() {
+  if (historyIndex.value <= 0) {
+    ElMessage.info('没有可撤销的操作')
+    return
+  }
+  historyIndex.value--
+  restoreState(historyStack.value[historyIndex.value])
+  ElMessage.success('已撤销')
+}
+
+function redo() {
+  if (historyIndex.value >= historyStack.value.length - 1) {
+    ElMessage.info('没有可重做的操作')
+    return
+  }
+  historyIndex.value++
+  restoreState(historyStack.value[historyIndex.value])
+  ElMessage.success('已重做')
+}
+
+function handleKeyDown(e) {
+  const isCtrl = e.ctrlKey || e.metaKey
+  const isShift = e.shiftKey
+  const key = e.key.toLowerCase()
+
+  if (isCtrl && key === 'z' && !isShift) {
+    e.preventDefault()
+    undo()
+  } else if ((isCtrl && key === 'y') || (isCtrl && isShift && key === 'z')) {
+    e.preventDefault()
+    redo()
+  } else if (isCtrl && key === 's') {
+    e.preventDefault()
+    handleExport()
+  } else if (isCtrl && key === 'r' && !isShift) {
+    e.preventDefault()
+    if (hasImage.value) {
+      rotateRight()
+    }
+  } else if (isCtrl && isShift && key === 'r') {
+    e.preventDefault()
+    if (hasImage.value) {
+      rotateLeft()
+    }
+  } else if (isCtrl && key === 'h') {
+    e.preventDefault()
+    if (hasImage.value) {
+      flipHorizontal()
+    }
+  } else if (isCtrl && key === 'v' && !isShift) {
+    e.preventDefault()
+    if (hasImage.value) {
+      flipVertical()
+    }
+  } else if (key === 'delete' || key === 'backspace') {
+    if (hasImage.value && !isManualCutoutMode.value) {
+      const active = fabricCanvas.getActiveObject()
+      if (active && active === cropRect) {
+        e.preventDefault()
+        fabricCanvas.remove(cropRect)
+        cropRect = null
+        cropMode.value = 'none'
+        currentPreset.value = ''
+        fabricCanvas.renderAll()
+        ElMessage.success('已删除裁剪框')
+        nextTick(() => saveState())
+      }
+    }
+  }
+}
+
 onMounted(async () => {
   await nextTick()
   initCanvas()
   loadHistory()
+  window.addEventListener('keydown', handleKeyDown)
 })
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown)
+})
+
+const DAMPING_FACTOR = 0.35
+const RETURN_ANIMATION_DURATION = 250
+let isDraggingImage = false
+let animating = false
 
 function initCanvas() {
   fabricCanvas = new Canvas('fabric-canvas', {
@@ -526,12 +679,127 @@ function initCanvas() {
     selection: false
   })
 
-  fabricCanvas.on('object:modified', updateCropInfo)
+  fabricCanvas.on('object:modified', handleObjectModified)
   fabricCanvas.on('object:scaling', updateCropInfo)
-  fabricCanvas.on('object:moving', updateCropInfo)
+  fabricCanvas.on('object:moving', handleObjectMoving)
   fabricCanvas.on('mouse:down', handleMouseDown)
   fabricCanvas.on('mouse:move', handleMouseMove)
   fabricCanvas.on('mouse:up', handleMouseUp)
+}
+
+function getImageBounds(obj) {
+  if (!obj) return { left: 0, top: 0, right: 0, bottom: 0 }
+  const objRect = obj.getBoundingRect()
+  return {
+    left: objRect.left,
+    top: objRect.top,
+    right: objRect.left + objRect.width,
+    bottom: objRect.top + objRect.height
+  }
+}
+
+function getCanvasBounds() {
+  return {
+    left: 0,
+    top: 0,
+    right: fabricCanvas.width,
+    bottom: fabricCanvas.height
+  }
+}
+
+function applyDamping(obj) {
+  if (!obj || animating) return
+  const objBounds = getImageBounds(obj)
+  const canvasBounds = getCanvasBounds()
+
+  let offsetX = 0
+  let offsetY = 0
+
+  if (objBounds.left < canvasBounds.left) {
+    offsetX = (canvasBounds.left - objBounds.left) * (1 - DAMPING_FACTOR)
+  } else if (objBounds.right > canvasBounds.right) {
+    offsetX = -(objBounds.right - canvasBounds.right) * (1 - DAMPING_FACTOR)
+  }
+
+  if (objBounds.top < canvasBounds.top) {
+    offsetY = (canvasBounds.top - objBounds.top) * (1 - DAMPING_FACTOR)
+  } else if (objBounds.bottom > canvasBounds.bottom) {
+    offsetY = -(objBounds.bottom - canvasBounds.bottom) * (1 - DAMPING_FACTOR)
+  }
+
+  if (offsetX !== 0 || offsetY !== 0) {
+    obj.set({
+      left: obj.left + offsetX,
+      top: obj.top + offsetY
+    })
+    obj.setCoords()
+  }
+}
+
+function animateReturnToBounds(obj) {
+  if (!obj || animating) return
+  const objBounds = getImageBounds(obj)
+  const canvasBounds = getCanvasBounds()
+
+  let targetLeft = obj.left
+  let targetTop = obj.top
+
+  if (objBounds.left < canvasBounds.left) {
+    targetLeft = obj.left + (canvasBounds.left - objBounds.left)
+  } else if (objBounds.right > canvasBounds.right) {
+    targetLeft = obj.left - (objBounds.right - canvasBounds.right)
+  }
+
+  if (objBounds.top < canvasBounds.top) {
+    targetTop = obj.top + (canvasBounds.top - objBounds.top)
+  } else if (objBounds.bottom > canvasBounds.bottom) {
+    targetTop = obj.top - (objBounds.bottom - canvasBounds.bottom)
+  }
+
+  if (targetLeft === obj.left && targetTop === obj.top) return
+
+  animating = true
+  obj.animate({
+    left: targetLeft,
+    top: targetTop
+  }, {
+    duration: RETURN_ANIMATION_DURATION,
+    easing: (t, b, c, d) => {
+      const ts = (t /= d) * t
+      const tc = ts * t
+      return b + c * (-2 * tc + 3 * ts)
+    },
+    onChange: () => {
+      obj.setCoords()
+      fabricCanvas.renderAll()
+    },
+    onComplete: () => {
+      animating = false
+      obj.setCoords()
+      fabricCanvas.renderAll()
+    }
+  })
+}
+
+function handleObjectMoving(opt) {
+  updateCropInfo()
+  const obj = opt.target
+  if (obj === mainImage) {
+    isDraggingImage = true
+    applyDamping(obj)
+  }
+}
+
+function handleObjectModified(opt) {
+  updateCropInfo()
+  const obj = opt.target
+  if (obj === mainImage && isDraggingImage) {
+    isDraggingImage = false
+    animateReturnToBounds(obj)
+    setTimeout(() => saveState(), RETURN_ANIMATION_DURATION + 50)
+  } else if (obj === cropRect) {
+    nextTick(() => saveState())
+  }
 }
 
 function triggerUpload() {
@@ -593,6 +861,7 @@ async function loadImageFile(file) {
       resetAdjustments()
 
       ElMessage.success('照片上传成功')
+      nextTick(() => saveState())
     } catch (err) {
       ElMessage.error('照片加载失败')
       console.error(err)
@@ -642,6 +911,8 @@ function createCropRect(width, height) {
   const rectWidth = width * scale
   const rectHeight = height * scale
 
+  const isPresetMode = cropMode.value === 'preset'
+
   cropRect = new Rect({
     left: imgRect.left + (imgRect.width - rectWidth) / 2,
     top: imgRect.top + (imgRect.height - rectHeight) / 2,
@@ -651,23 +922,45 @@ function createCropRect(width, height) {
     stroke: '#409eff',
     strokeWidth: 2,
     strokeDashArray: [5, 5],
-    selectable: true,
-    hasControls: true,
+    selectable: !isPresetMode,
+    hasControls: !isPresetMode,
+    lockMovementX: isPresetMode,
+    lockMovementY: isPresetMode,
+    lockScalingX: isPresetMode,
+    lockScalingY: isPresetMode,
+    lockRotation: isPresetMode,
     lockUniScaling: true,
     transparentCorners: false,
     cornerColor: '#409eff',
-    cornerSize: 10
+    cornerSize: 10,
+    hoverCursor: isPresetMode ? 'default' : 'move'
   })
 
-  cropRect.setControlsVisibility({
-    mt: false,
-    mb: false,
-    ml: false,
-    mr: false
-  })
+  if (!isPresetMode) {
+    cropRect.setControlsVisibility({
+      mt: false,
+      mb: false,
+      ml: false,
+      mr: false
+    })
+  } else {
+    cropRect.setControlsVisibility({
+      mt: false,
+      mb: false,
+      ml: false,
+      mr: false,
+      tl: false,
+      tr: false,
+      bl: false,
+      br: false,
+      mtr: false
+    })
+  }
 
   fabricCanvas.add(cropRect)
-  fabricCanvas.setActiveObject(cropRect)
+  if (!isPresetMode) {
+    fabricCanvas.setActiveObject(cropRect)
+  }
   fabricCanvas.renderAll()
 
   cropWidth.value = Math.round(rectWidth)
@@ -737,6 +1030,7 @@ function applyCrop() {
       cropMode.value = 'none'
 
       ElMessage.success('裁剪完成')
+      nextTick(() => saveState())
     })
   }
   img.src = dataURL
@@ -749,18 +1043,39 @@ async function autoCutout() {
   }
 
   try {
-    const tempCanvas = document.createElement('canvas')
-    const ctx = tempCanvas.getContext('2d')
     const imgWidth = mainImage.width
     const imgHeight = mainImage.height
+    const scaleX = mainImage.scaleX
+    const scaleY = mainImage.scaleY
+    const left = mainImage.left
+    const top = mainImage.top
+    const angle = mainImage.angle || 0
+    const flipX = mainImage.flipX
+    const flipY = mainImage.flipY
+    const filters = [...(mainImage.filters || [])]
 
-    tempCanvas.width = imgWidth
-    tempCanvas.height = imgHeight
+    const renderCanvas = document.createElement('canvas')
+    renderCanvas.width = imgWidth
+    renderCanvas.height = imgHeight
+    const renderCtx = renderCanvas.getContext('2d')
 
-    const imgElement = mainImage.getElement()
-    ctx.drawImage(imgElement, 0, 0, imgWidth, imgHeight)
+    const dataURL = mainImage.toDataURL({
+      format: 'png',
+      multiplier: 1
+    })
 
-    const imageData = ctx.getImageData(0, 0, imgWidth, imgHeight)
+    const loadImage = (src) => new Promise((resolve, reject) => {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => resolve(img)
+      img.onerror = reject
+      img.src = src
+    })
+
+    const sourceImg = await loadImage(dataURL)
+    renderCtx.drawImage(sourceImg, 0, 0, imgWidth, imgHeight)
+
+    const imageData = renderCtx.getImageData(0, 0, imgWidth, imgHeight)
     const bgColor = getEdgeColor(imageData)
 
     const data = imageData.data
@@ -781,27 +1096,31 @@ async function autoCutout() {
       }
     }
 
-    ctx.putImageData(imageData, 0, 0)
+    renderCtx.putImageData(imageData, 0, 0)
 
-    const newDataURL = tempCanvas.toDataURL('image/png')
+    const newDataURL = renderCanvas.toDataURL('image/png')
     const newImg = await FabricImage.fromURL(newDataURL)
-
-    const scaleX = mainImage.scaleX
-    const scaleY = mainImage.scaleY
-    const left = mainImage.left
-    const top = mainImage.top
 
     fabricCanvas.remove(mainImage)
     mainImage = newImg
 
-    newImg.scaleToWidth(imgWidth * scaleX)
     newImg.set({
       left: left,
       top: top,
       originX: 'center',
       originY: 'center',
-      selectable: true
+      selectable: true,
+      scaleX: scaleX,
+      scaleY: scaleY,
+      angle: angle,
+      flipX: flipX,
+      flipY: flipY
     })
+
+    if (filters.length > 0) {
+      newImg.filters = filters
+      newImg.applyFilters()
+    }
 
     fabricCanvas.add(newImg)
     fabricCanvas.sendToBack(newImg)
@@ -815,6 +1134,7 @@ async function autoCutout() {
     fabricCanvas.renderAll()
 
     ElMessage.success('智能抠图完成')
+    nextTick(() => saveState())
   } catch (err) {
     ElMessage.error('抠图失败')
     console.error(err)
@@ -964,38 +1284,64 @@ function drawOnMaskLine(x1, y1, x2, y2) {
 async function updateMaskedPreview() {
   if (!maskCanvas || !mainImage) return
 
-  const tempCanvas = document.createElement('canvas')
-  const ctx = tempCanvas.getContext('2d')
-  const imgWidth = mainImage.width
-  const imgHeight = mainImage.height
-
-  tempCanvas.width = imgWidth
-  tempCanvas.height = imgHeight
-
-  const imgElement = mainImage.getElement()
-  ctx.drawImage(imgElement, 0, 0, imgWidth, imgHeight)
-  ctx.globalCompositeOperation = 'destination-in'
-  ctx.drawImage(maskCanvas, 0, 0, imgWidth, imgHeight)
-
-  const newDataURL = tempCanvas.toDataURL('image/png')
   try {
-    const newImg = await FabricImage.fromURL(newDataURL)
+    const tempCanvas = document.createElement('canvas')
+    const ctx = tempCanvas.getContext('2d')
+    const imgWidth = mainImage.width
+    const imgHeight = mainImage.height
     const scaleX = mainImage.scaleX
     const scaleY = mainImage.scaleY
     const left = mainImage.left
     const top = mainImage.top
+    const angle = mainImage.angle || 0
+    const flipX = mainImage.flipX
+    const flipY = mainImage.flipY
+    const filters = [...(mainImage.filters || [])]
+
+    tempCanvas.width = imgWidth
+    tempCanvas.height = imgHeight
+
+    const dataURL = mainImage.toDataURL({
+      format: 'png',
+      multiplier: 1
+    })
+
+    const loadImage = (src) => new Promise((resolve, reject) => {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => resolve(img)
+      img.onerror = reject
+      img.src = src
+    })
+
+    const sourceImg = await loadImage(dataURL)
+    ctx.drawImage(sourceImg, 0, 0, imgWidth, imgHeight)
+    ctx.globalCompositeOperation = 'destination-in'
+    ctx.drawImage(maskCanvas, 0, 0, imgWidth, imgHeight)
+
+    const newDataURL = tempCanvas.toDataURL('image/png')
+    const newImg = await FabricImage.fromURL(newDataURL)
 
     fabricCanvas.remove(mainImage)
     mainImage = newImg
 
-    newImg.scaleToWidth(imgWidth * scaleX)
     newImg.set({
       left: left,
       top: top,
       originX: 'center',
       originY: 'center',
-      selectable: true
+      selectable: true,
+      scaleX: scaleX,
+      scaleY: scaleY,
+      angle: angle,
+      flipX: flipX,
+      flipY: flipY
     })
+
+    if (filters.length > 0) {
+      newImg.filters = filters
+      newImg.applyFilters()
+    }
 
     fabricCanvas.add(newImg)
     fabricCanvas.sendToBack(newImg)
@@ -1017,6 +1363,7 @@ function applyMaskCutout() {
   fabricCanvas.renderAll()
   maskCanvas = null
   ElMessage.success('手动抠图完成')
+  nextTick(() => saveState())
 }
 
 function selectBgColor(color) {
@@ -1036,6 +1383,7 @@ function applyBgColor() {
   if (fabricCanvas && !transparentBg.value) {
     fabricCanvas.backgroundColor = currentBgColor.value
     fabricCanvas.renderAll()
+    nextTick(() => saveState())
   }
 }
 
@@ -1046,6 +1394,7 @@ function toggleTransparentBg(val) {
     fabricCanvas.backgroundColor = currentBgColor.value
   }
   fabricCanvas.renderAll()
+  nextTick(() => saveState())
 }
 
 function applyAdjustments() {
@@ -1063,6 +1412,11 @@ function applyAdjustments() {
   }
   mainImage.applyFilters()
   fabricCanvas.renderAll()
+
+  if (adjustSaveTimer) clearTimeout(adjustSaveTimer)
+  adjustSaveTimer = setTimeout(() => {
+    saveState()
+  }, 500)
 }
 
 function resetAdjustments() {
@@ -1073,6 +1427,7 @@ function resetAdjustments() {
     mainImage.filters = []
     mainImage.applyFilters()
     fabricCanvas.renderAll()
+    nextTick(() => saveState())
   }
 }
 
@@ -1081,6 +1436,7 @@ function rotateLeft() {
   const currentAngle = mainImage.angle || 0
   mainImage.set({ angle: currentAngle - 90 })
   fabricCanvas.renderAll()
+  nextTick(() => saveState())
 }
 
 function rotateRight() {
@@ -1088,18 +1444,21 @@ function rotateRight() {
   const currentAngle = mainImage.angle || 0
   mainImage.set({ angle: currentAngle + 90 })
   fabricCanvas.renderAll()
+  nextTick(() => saveState())
 }
 
 function flipHorizontal() {
   if (!mainImage) return
   mainImage.set('flipX', !mainImage.flipX)
   fabricCanvas.renderAll()
+  nextTick(() => saveState())
 }
 
 function flipVertical() {
   if (!mainImage) return
   mainImage.set('flipY', !mainImage.flipY)
   fabricCanvas.renderAll()
+  nextTick(() => saveState())
 }
 
 function applyBorder() {
@@ -1121,6 +1480,7 @@ function applyBorder() {
   fabricCanvas.sendToBack(borderRect)
   fabricCanvas.renderAll()
   ElMessage.success('边框已应用')
+  nextTick(() => saveState())
 }
 
 function selectLayoutPreset(preset) {
@@ -1182,6 +1542,7 @@ function generateLayout() {
       layoutPreview.value = true
       showLayoutPreview(layoutImg, paperWidth, paperHeight)
       ElMessage.success('排版生成成功')
+      nextTick(() => saveState())
     })
   }
   img.src = dataURL

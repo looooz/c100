@@ -13,3 +13,305 @@ html, body, #app {
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
+
+.panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-item label {
+  font-size: 13px;
+  color: #606266;
+  font-weight: 500;
+}
+
+.upload-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  border: 2px dashed #dcdfe6;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+  background-color: #fafafa;
+}
+
+.upload-area:hover,
+.upload-area.drag-over {
+  border-color: #409eff;
+  background-color: #ecf5ff;
+}
+
+.upload-icon {
+  color: #409eff;
+  margin-bottom: 8px;
+}
+
+.upload-text {
+  font-size: 14px;
+  color: #606266;
+  margin-bottom: 4px;
+}
+
+.upload-tip {
+  font-size: 12px;
+  color: #909399;
+}
+
+.size-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.size-item {
+  padding: 10px 6px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.size-item:hover {
+  border-color: #409eff;
+  background-color: #ecf5ff;
+}
+
+.size-item.active {
+  border-color: #409eff;
+  background-color: #409eff;
+  color: #fff;
+}
+
+.size-name {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.size-desc {
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+.size-mm {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.custom-size {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custom-size .x {
+  color: #909399;
+}
+
+.crop-info {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: #909399;
+  padding: 8px;
+  background-color: #f5f7fa;
+  border-radius: 4px;
+}
+
+.color-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.color-item {
+  padding: 8px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+
+.color-item:hover {
+  border-color: #dcdfe6;
+}
+
+.color-item.active {
+  border-color: #409eff;
+}
+
+.color-preview {
+  width: 100%;
+  height: 30px;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  border: 1px solid #e4e7ed;
+}
+
+.color-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.color-purpose {
+  font-size: 10px;
+  color: #909399;
+}
+
+.tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 6px;
+}
+
+.value-display {
+  text-align: center;
+  font-size: 12px;
+  color: #909399;
+  margin-top: -4px;
+}
+
+.btn-group {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-group .el-button {
+  flex: 1;
+}
+
+.layout-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.layout-preset-item {
+  padding: 8px 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.layout-preset-item:hover {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.layout-preset-item.active {
+  background-color: #409eff;
+  border-color: #409eff;
+  color: #fff;
+}
+
+.layout-info {
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.8;
+}
+
+.export-preview {
+  padding: 12px;
+  background-color: #f5f7fa;
+  border-radius: 6px;
+}
+
+.preview-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #606266;
+  margin-bottom: 8px;
+}
+
+.preview-info {
+  font-size: 12px;
+  color: #909399;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.history-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  align-items: center;
+}
+
+.history-thumb {
+  width: 50px;
+  height: 60px;
+  border-radius: 4px;
+  overflow: hidden;
+  background-color: #f0f2f5;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.history-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.no-thumb {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #c0c4cc;
+}
+
+.history-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-name {
+  font-size: 13px;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-time {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+.history-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.empty-history {
+  padding: 20px 0;
+}

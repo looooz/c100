@@ -1,0 +1,11 @@
+{
+  "name": "id-photo-maker",
+  "version": "1.0.0",
+  "description": "在线证件照制作工具",
+  "scripts": {
+    "start": "bash start.sh",
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "dev:backend": "cd backend && npm start",
+    "dev:frontend": "cd frontend && npm run dev"
+  }
+}
